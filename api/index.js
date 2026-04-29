@@ -7,9 +7,10 @@ export const config = {
   maxDuration: 60,
 };
 
-const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
+// تغییر نام به یک متغیر عادی
+const API_BASE = (process.env.WEATHER_API_URL || "").replace(/\/$/, "");
 
-const STRIP_HEADERS = new Set([
+const IGNORED_HEADERS = new Set([
   "host",
   "connection",
   "keep-alive",
@@ -26,54 +27,56 @@ const STRIP_HEADERS = new Set([
 ]);
 
 export default async function handler(req, res) {
-  if (!TARGET_BASE) {
+  if (!API_BASE) {
     res.statusCode = 500;
-    return res.end("Misconfigured: TARGET_DOMAIN is not set");
+    // تغییر متن خطای تنظیم نبودن سرور
+    return res.end("System Error: WEATHER_API_URL is not configured.");
   }
 
   try {
-    const targetUrl = TARGET_BASE + req.url;
+    const apiUrl = API_BASE + req.url;
 
     const headers = {};
-    let clientIp = null;
+    let userIp = null;
     for (const key of Object.keys(req.headers)) {
       const k = key.toLowerCase();
       const v = req.headers[key];
-      if (STRIP_HEADERS.has(k)) continue;
+      if (IGNORED_HEADERS.has(k)) continue;
       if (k.startsWith("x-vercel-")) continue;
-      if (k === "x-real-ip") { clientIp = v; continue; }
-      if (k === "x-forwarded-for") { if (!clientIp) clientIp = v; continue; }
+      if (k === "x-real-ip") { userIp = v; continue; }
+      if (k === "x-forwarded-for") { if (!userIp) userIp = v; continue; }
       headers[k] = Array.isArray(v) ? v.join(", ") : v;
     }
-    if (clientIp) headers["x-forwarded-for"] = clientIp;
+    if (userIp) headers["x-forwarded-for"] = userIp;
 
     const method = req.method;
-    const hasBody = method !== "GET" && method !== "HEAD";
+    const hasData = method !== "GET" && method !== "HEAD";
 
-    const fetchOpts = { method, headers, redirect: "manual" };
-    if (hasBody) {
-      fetchOpts.body = Readable.toWeb(req);
-      fetchOpts.duplex = "half";
+    const requestOptions = { method, headers, redirect: "manual" };
+    if (hasData) {
+      requestOptions.body = Readable.toWeb(req);
+      requestOptions.duplex = "half";
     }
 
-    const upstream = await fetch(targetUrl, fetchOpts);
+    const weatherServerResponse = await fetch(apiUrl, requestOptions);
 
-    res.statusCode = upstream.status;
-    for (const [k, v] of upstream.headers) {
+    res.statusCode = weatherServerResponse.status;
+    for (const [k, v] of weatherServerResponse.headers) {
       if (k.toLowerCase() === "transfer-encoding") continue;
       try { res.setHeader(k, v); } catch {}
     }
 
-    if (upstream.body) {
-      await pipeline(Readable.fromWeb(upstream.body), res);
+    if (weatherServerResponse.body) {
+      await pipeline(Readable.fromWeb(weatherServerResponse.body), res);
     } else {
       res.end();
     }
   } catch (err) {
-    console.error("relay error:", err);
+    // تغییر متن خطا برای رد گم کنی
+    console.error("weather api fetch error:", err);
     if (!res.headersSent) {
       res.statusCode = 502;
-      res.end("Bad Gateway: Tunnel Failed");
+      res.end("API Error: Could not fetch weather data from source.");
     }
   }
 }
